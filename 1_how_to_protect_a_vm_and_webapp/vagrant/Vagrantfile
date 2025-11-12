@@ -1,0 +1,121 @@
+# Vagrantfile for Sight-ech two-VM lab (attacker + target)
+VAGRANTFILE_API_VERSION = "2"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+  # Default box (adjust if you have a preferred Rocky/Ubuntu box)
+  BOX_TARGET = "rockylinux/9"   # target
+  BOX_ATTACKER = "generic/rocky9" # simple attacker VM (or use same box)
+
+  # Shared synced folder (repo mounted to /vagrant by default)
+  config.vm.synced_folder ".", "/vagrant", disabled: false
+  config.vm.synced_folder "../demo-app", "/vagrant/demo-app", disabled: false
+  config.vm.synced_folder "../attacker", "/vagrant/attacker", disabled: false
+
+  # Common VM settings
+  config.vm.provider :libvirt do |libvirt|
+    libvirt.disk_bus = 'virtio'
+  end
+
+  # VM 1: attacker / operator
+  config.vm.define "attacker" do |attacker|
+    attacker.vm.box = BOX_ATTACKER
+    attacker.vm.hostname = "attacker"
+    # Static private network IP (change if needed)
+    attacker.vm.network "private_network", ip: "192.168.56.101"
+
+    # Provision attacker: install basic testing tools and (optional) copy private key
+    attacker.vm.provision "shell", inline: <<-SHELL
+      set -euo pipefail
+      # Update & install simple tooling
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf -y update
+        sudo dnf -y install -y nmap httpd-tools which curl
+      else
+        sudo yum -y update
+        sudo yum -y install -y nmap httpd-tools which curl
+      fi
+
+      # ApacheBench (ab) might be part of httpd-tools package; locust can be installed via pip if needed
+      # Optional: install python3-pip and locust
+      if ! command -v locust >/dev/null 2>&1; then
+        sudo dnf -y install python3-pip || true
+        sudo pip3 install locust locust-plugins || true
+      fi
+
+      # Optional convenience: copy a lab private key if present in /vagrant/keys (lab only)
+      # if [ -f /vagrant/keys/id_rsa ]; then
+      #   mkdir -p /home/vagrant/.ssh
+      #   cp /vagrant/keys/id_rsa /home/vagrant/.ssh/id_rsa
+      #   chmod 600 /home/vagrant/.ssh/id_rsa
+      #   chown vagrant:vagrant /home/vagrant/.ssh/id_rsa
+      #   echo "Private key copied to attacker VM for lab convenience."
+      # fi
+    SHELL
+
+    # Provider-specific tuning
+    attacker.vm.provider "libvirt" do |libvirt|
+      libvirt.cpus = 1
+      libvirt.memory = 1024
+    end
+  end
+
+  # VM 2: target (web app + hardening)
+  config.vm.define "target" do |target|
+    target.vm.box = BOX_TARGET
+    target.vm.hostname = "target"
+    # Static private network IP (change if needed)
+    target.vm.network "private_network", ip: "192.168.56.102"
+    
+
+    # Forward a local host port to the VM's HTTP port for convenience (optional)
+    # Use host port 8080 -> guest 80 so you can access webapp via localhost:8080
+    target.vm.network "forwarded_port", guest: 80, host: 8080, auto_correct: true
+
+    # Copy public key into repo-mounted path then run provision script
+    # target.vm.provision "file", source: "keys/id_rsa.pub", destination: "/vagrant/keys/id_rsa.pub" rescue nil
+
+    # Run the key-based hardening provisioning script on target
+    target.vm.provision "shell", name: "secure_vm", privileged: true, inline: <<-SHELL
+      set -euo pipefail
+      # wait a few seconds for networking to settle
+      sleep 2
+      # Ensure script exists
+      if [ ! -f /vagrant/scripts/secure_target.sh ]; then
+        echo "Error: provision script /vagrant/scripts/secure_target.sh not found."
+        exit 1
+      fi
+      # Run the script with:
+      #  --port 2222
+      #  --user secuser
+      #  --pubkey-file /vagrant/keys/id_rsa.pub
+      #  --allow-ip 192.168.56.101  (attacker attacker)
+      sudo bash /vagrant/scripts/secure_target.sh --port 50022 --user secuser --pubkey-file /vagrant/keys/id_rsa.pub --allow-ip 192.168.56.101
+    SHELL
+
+    target.vm.provision "shell", name: "install_docker", privileged: true, inline: <<-SHELL
+        sudo bash /vagrant/scripts/install_docker.sh secuser
+        sudo systemctl status docker --no-pager
+        docker --version
+        docker compose version
+        sudo docker run --rm hello-world
+    SHELL
+
+    target.vm.provision "shell", name: "deploy_webapp", privileged: true, inline: <<-SHELL
+        sudo docker compose -f /vagrant/demo-app/docker-compose.yml up -d
+    SHELL
+
+
+    # (Optional) Provision the web app (if you have an app provision script)
+    # target.vm.provision "shell", privileged: true, path: "scripts/provision_webapp.sh"
+
+    target.vm.provider "libvirt" do |libvirt|
+      libvirt.cpus = 2
+      libvirt.memory = 2048
+    end
+    config.ssh.port = 50022
+  end
+
+  # General behavior: do not insert new insecure keys for boxes that do that by default
+  # This avoids Vagrant replacing keys when you want a consistent key setup (lab)
+  config.ssh.insert_key = false
+end
