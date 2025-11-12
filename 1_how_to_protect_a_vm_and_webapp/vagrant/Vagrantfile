@@ -112,7 +112,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       libvirt.cpus = 2
       libvirt.memory = 2048
     end
-    config.ssh.port = 22
+    
+    target.ssh.port = 50022
   end
 
   # General behavior: do not insert new insecure keys for boxes that do that by default

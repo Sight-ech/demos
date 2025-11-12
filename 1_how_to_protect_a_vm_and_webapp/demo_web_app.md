@@ -54,8 +54,13 @@
   * VM2 = **target** (Rocky Linux, web app, Nginx, Fail2Ban, firewall)
 
 ---
-
 # Steps
+
+Here is the roadmap of the steps we will follow in this demo:
+
+![steps to follow](docs/demo_secure_vm_webapp.excalidraw.svg)
+
+---
 
 ## Init
 ```bash
@@ -113,7 +118,7 @@ cd /vagrant/attacker/
 pip install -r requirements.txt
 
 export VM2_IP=192.168.56.102
-python async_ssh_brutforce.py --host $VM2_IP \
+python multi_ssh_brutforce.py --host $VM2_IP \
 --username vagrant \
 --password-file 200_passwords.txt
 
@@ -182,7 +187,7 @@ sudo systemctl status fail2ban
 
 ```bash
 # From attacker VM
-python async_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
+python multi_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 
 Now try several times to brute force SSH again. After 3 failed attempts, your IP should be banned and further attempts will be blocked.

