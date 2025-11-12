@@ -285,3 +285,62 @@ curl -s http://192.168.56.102:8080/add -b cookies.txt
 # From attacker VM
 cd /vagrant/attacker/
 ```
+
+
+
+### first protection steps
+
+Verify that files:
+
+```bash
+access_log /var/log/nginx/api.access.log;
+error_log  /var/log/nginx/api.error.log;
+```
+
+Or set it here:
+/etc/nginx/sites-available/api.conf
+sudo systemctl reload nginx
+
+### Create the filter
+sudo vi /etc/fail2ban/filter.d/nginx-api-auth.conf
+
+Add:
+```
+[Definition]
+failregex = ^<HOST> -.*"(GET|POST|PUT|DELETE|PATCH).*HTTP.*" (401|403)
+ignoreregex =
+```
+
+### Create the jail
+sudo vi /etc/fail2ban/jail.d/nginx-api-auth.local
+
+Add:
+```
+[nginx-api-auth]
+enabled = true
+filter = nginx-api-auth
+logpath = /var/log/nginx/api.access.log
+maxretry = 5
+findtime = 600
+bantime = 86400
+ignoreip = 127.0.0.1/8 ::1
+action = iptables[name=APIAuth, port=http, protocol=tcp]
+```
+
+### Reload fail2ban
+```bash
+sudo fail2ban-client reload
+
+# Restart fail2ban
+sudo systemctl restart fail2ban
+sudo systemctl status fail2ban
+```
+
+### Check the status
+```bash
+sudo fail2ban-client status nginx-api-auth
+```
+
+
+
+
