@@ -175,7 +175,7 @@ sudo systemctl restart sshd
 
 ```bash
 # From attacker VM
-conda activate demos
+conda activate demos # for localhost test
 python async_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 You'll see that the brute force attack fails now and cannot find the password.
@@ -221,7 +221,7 @@ sudo systemctl status fail2ban
 
 ```bash
 # From attacker VM
-conda activate demos
+conda activate demos # for localhost test
 python multi_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 
@@ -283,7 +283,7 @@ sudo systemctl restart sshd
 Test again the brute force attack:
 ```bash
 # From attacker VM
-conda activate demos
+conda activate demos # for localhost test
 python async_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 
@@ -329,9 +329,16 @@ In our case, I built a simple API that allows users to login, add values, and ge
 │  User   │─────▶│  API (HTTP) │─────▶│  App Logic   │
 └─────────┘      └─────────────┘      └──────────────┘
             │
-            ├─ POST /login   → authenticate
+            ├─ GET /index    → render index page
+            ├─ GET /health   → check health
+            ├─ POST /login   → authenticate login
+            ├─ POST /logout  → authenticate logout
             ├─ GET  /add     → get sum
-            └─ POST /add     → add value
+            ├─ POST /add     → add value
+            ├─ POST /add     → add value
+            ├─ GET /io       → simulate I/O bound
+            └─ GET /compute  → simulate compute
+
 ```
 
 ---

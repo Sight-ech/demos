@@ -4,6 +4,7 @@ import random
 from functools import wraps
 from flask import Flask, request, jsonify, session
 import psycopg2
+import sqlite3
 from psycopg2.extras import RealDictCursor
 from base64 import b64decode
 
@@ -18,22 +19,39 @@ app.secret_key = SECRET_KEY
 def get_conn(retries=10, delay=1.0):
     for i in range(retries):
         try:
-            return psycopg2.connect(DATABASE_URL)
+            if "postgresql" in DATABASE_URL:
+                return psycopg2.connect(DATABASE_URL)
+            else:
+                return sqlite3.connect(DATABASE_URL.replace("sqlite:///", ""))
         except Exception:
             time.sleep(delay)
     raise RuntimeError("DB connection failed")
 
 # Ensure table/row exist (id=1 holding the sum)
 def init_db():
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS totals (
-                id INT PRIMARY KEY,
-                sum INT NOT NULL DEFAULT 0
-            );
-        """)
-        cur.execute("INSERT INTO totals (id, sum) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;")
-        conn.commit()
+    with get_conn() as conn:
+        if "postgresql" in DATABASE_URL:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS totals (
+                        id INT PRIMARY KEY,
+                        sum INT NOT NULL DEFAULT 0
+                    );
+                """)
+                cur.execute("INSERT INTO totals (id, sum) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;")
+                conn.commit()
+        else:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS totals (
+                    id INTEGER PRIMARY KEY,
+                    sum INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            # SQLite uses INSERT OR IGNORE instead of ON CONFLICT DO NOTHING
+            cur.execute("INSERT OR IGNORE INTO totals (id, sum) VALUES (1, 0);")
+            conn.commit()
+            cur.close()
 
 init_db()
 
@@ -59,6 +77,39 @@ def require_auth(f):
             return f(*args, **kwargs)
         return jsonify({"error": "Unauthorized"}), 401
     return wrapper
+
+@app.get("/")
+def index():
+    return """
+    <html>
+      <body>
+        <h1>welcome dear customer</h1>
+        <button onclick="checkHealth()">health</button>
+        <div id="health-result"></div>
+        <script>
+          async function checkHealth() {
+            const resultDiv = document.getElementById('health-result');
+            resultDiv.innerHTML = 'Checking health...';
+            const start = performance.now();
+            try {
+              const resp = await fetch('/health');
+              const data = await resp.json();
+              const end = performance.now();
+              resultDiv.innerHTML =
+                '<pre>' + JSON.stringify(data) + '</pre>' +
+                '<div>Took: ' + (end - start).toFixed(2) + ' ms</div>';
+            } catch (e) {
+              resultDiv.innerHTML = 'Error: ' + e;
+            }
+          }
+        </script>
+      </body>
+    </html>
+    """, 200, {"Content-Type": "text/html"}
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"})
 
 @app.post("/login")
 def login():
@@ -99,10 +150,6 @@ def add_sum():
         new_sum = cur.fetchone()[0]
         conn.commit()
     return jsonify({"sum": new_sum})
-
-@app.get("/health")
-def health():
-    return jsonify({"status": "ok"})
 
 @app.get("/io")
 @require_auth
