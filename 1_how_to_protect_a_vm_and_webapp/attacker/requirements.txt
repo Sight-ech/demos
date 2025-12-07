@@ -2,3 +2,5 @@ asyncssh
 termcolor
 paramiko
 asyncssh
+aiohttp
+locust

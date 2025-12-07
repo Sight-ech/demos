@@ -1,5 +1,6 @@
 import os
 import time
+import random
 from functools import wraps
 from flask import Flask, request, jsonify, session
 import psycopg2
@@ -102,3 +103,19 @@ def add_sum():
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+@app.get("/io")
+@require_auth
+def simulate_io():
+    """Simulate I/O-bound work by sleeping for a random short duration."""
+    duration = random.uniform(0.5, 5.0)  # Sleep between 0.5 and 5 seconds
+    time.sleep(duration)
+    return jsonify({"message": "I/O-bound simulation complete", "slept_seconds": round(duration, 2)})
+
+@app.get("/compute")
+@require_auth
+def simulate_compute():
+    """Simulate CPU-bound work by performing a simple computation."""
+    n = 10**6
+    result = sum(i*i for i in range(n))
+    return jsonify({"message": "CPU-bound simulation complete", "result": result})

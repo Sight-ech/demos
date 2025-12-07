@@ -20,10 +20,13 @@
 * VPS hardening (Rocky): [https://github.com/Sight-ech/how_to/blob/main/secure_vps_rocky.md](https://github.com/Sight-ech/how_to/blob/main/secure_vps_rocky.md)
 * Web app hardening & security layers: [https://github.com/Sight-ech/how_to/blob/main/secure_web_app.md](https://github.com/Sight-ech/how_to/blob/main/secure_web_app.md)
 
+
 **Security layers (quick pointer)**
 
 * We follow the layered model in the secure_web_app guide: (edge / network) → (host / OS) → (reverse proxy / web server) → (app / auth / rate limits) → (monitoring & response).
   For more detail and the diagram, open the web-app security doc above.
+
+---
 
 **Quick difference: libvirt/KVM vs VirtualBox**
 
@@ -40,6 +43,8 @@
   * Slightly lower I/O/CPU performance vs KVM for heavy workloads.
 * **Which to choose for this demo:** prefer **libvirt/KVM** for headless, reproducible, closer-to-production behaviour; use VirtualBox if demoing on a laptop with a GUI or where libvirt isn't available.
 
+---
+
 **Assumptions / prerequisites**
 
 * You already have the repo / project files, Vagrantfile and provisioning scripts in place.
@@ -54,6 +59,34 @@
   * VM2 = **target** (Rocky Linux, web app, Nginx, Fail2Ban, firewall)
 
 ---
+## Table of Contents
+
+- [Demo — Secure VM and web app, and attack them](#demo--secure-vm-and-web-app-and-attack-them)
+  - [Intro](#intro)
+  - [Table of Contents](#table-of-contents)
+- [Steps](#steps)
+  - [Init](#init)
+  - [Set up Vagrant VMs](#set-up-vagrant-vms)
+  - [SSH Attack and Protection](#ssh-attack-and-protection)
+    - [First brute force attack](#first-brute-force-attack)
+    - [First protection steps](#first-protection-steps)
+    - [Second protection steps](#second-protection-steps)
+    - [Third protection steps](#third-protection-steps)
+  - [Web App Attack and Protection](#web-app-attack-and-protection)
+    - [Set up the web app](#set-up-the-web-app)
+    - [Architecture of the API](#architecture-of-the-api)
+    - [Play with our web app](#play-with-our-web-app)
+    - [Brute force attack on web app login](#brute-force-attack-on-web-app-login)
+    - [Locust Scenarios](#locust-scenarios)
+    - [first protection steps](#first-protection-steps-1)
+    - [Create the filter](#create-the-filter)
+    - [Create the jail](#create-the-jail)
+    - [Reload fail2ban](#reload-fail2ban)
+    - [Check the status](#check-the-status)
+
+
+---
+
 # Steps
 
 Here is the roadmap of the steps we will follow in this demo:
@@ -68,7 +101,7 @@ git clone https://github.com/Sight-ech/demos.git
 cd demos/1_how_to_protect_a_vm_and_webapp/
 ```
 
-### Share
+**Share useful links**
 Vagrant / lab setup: https://github.com/Sight-ech/how_to/blob/main/set_up_vagrant_ubuntu.md
 Secure VPS Rocky Linux: https://github.com/Sight-ech/how_to/blob/main/secure_vps_rocky_linux.md
 Secure Web App: https://github.com/Sight-ech/how_to/blob/main/secure_web_app.md
@@ -142,6 +175,7 @@ sudo systemctl restart sshd
 
 ```bash
 # From attacker VM
+conda activate demos
 python async_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 You'll see that the brute force attack fails now and cannot find the password.
@@ -187,6 +221,7 @@ sudo systemctl status fail2ban
 
 ```bash
 # From attacker VM
+conda activate demos
 python multi_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 
@@ -248,6 +283,7 @@ sudo systemctl restart sshd
 Test again the brute force attack:
 ```bash
 # From attacker VM
+conda activate demos
 python async_ssh_brutforce.py --host 192.168.56.102 --port 50022 --username vagrant --password-file 200_passwords.txt
 ```
 
@@ -262,7 +298,48 @@ vagrant provision target --provision-with install_docker
 vagrant provision target --provision-with deploy_webapp
 ```
 
-### Test the web app
+In our web app, we have **3 main components**:
+1. The API (the web application itself)
+2. The reverse proxy (Nginx)
+3. The database (SQLite)
+
+Here is the architecture diagram of our web app:
+
+```
+┌──────────────┐  http  ┌─────────────┐        ┌──────────────┐
+│   Internet   │──────▶ │  Reverse    │──────▶ │    API       │
+│   Clients    │        │   Proxy     │        │ (Web App)    │
+└──────────────┘        └─────────────┘        └──────────────┘
+                                                      |
+                                                      ▼
+                                               ┌──────────────┐
+                                               │   Database   │
+                                               │   (SQLite)   │
+                                               └──────────────┘
+```
+
+### Architecture of the API
+An API is a simple web application that exposes endpoints to perform operations.
+It makes the interface between users and the logic of the application.
+
+In our case, I built a simple API that allows users to login, add values, and get the sum of the added values. So if I had to represent it, it would look like this:
+
+```
+┌─────────┐      ┌─────────────┐      ┌──────────────┐
+│  User   │─────▶│  API (HTTP) │─────▶│  App Logic   │
+└─────────┘      └─────────────┘      └──────────────┘
+            │
+            ├─ POST /login   → authenticate
+            ├─ GET  /add     → get sum
+            └─ POST /add     → add value
+```
+
+---
+
+### Play with our web app
+Let's play with our web app using curl commands.
+So curl commands are usally used to interact with web applications from the command line.
+They do the same the same job as a web browser but from the terminal.
 
 ```bash
 # Check the health
@@ -272,6 +349,9 @@ curl http://192.168.56.102:8080/health
 curl http://192.168.56.102:8080/add
 
 # Login
+curl -s -X POST http://192.168.56.102:8080/login   -H "Content-Type: application/json"   -d '{"username":"demo","password":"changeme"}'
+
+# Login and save cookies
 curl -s -X POST http://192.168.56.102:8080/login   -H "Content-Type: application/json"   -d '{"username":"demo","password":"changeme"}'   -c cookies.txt
 
 # Get current values (Authenticated) --> Return sum
@@ -284,14 +364,72 @@ curl -s -X POST http://192.168.56.102:8080/add -H "Content-Type: application/jso
 curl -s http://192.168.56.102:8080/add -b cookies.txt
 ```
 
+Usually, credentials are not stored in cookies but in tokens (JWT, OAuth2, etc). But for the sake of simplicity, we use cookies here. Technically, the cookie contains a session ID that is mapped to the user session on the server side.
+
 ### Brute force attack on web app login
 
 ```bash
 # From attacker VM
 cd /vagrant/attacker/
+python async_http_brutforce.py --host 192.168.56.102 --port 8080 --endpoint /login --username demo --password-file 200_passwords.txt
 ```
 
+### Locust Scenarios
 
+Locust is an open-source load testing tool that allows you to define user behavior with Python code and simulate millions of users to test the performance of your web applications.
+Here we will run 3 different scenarios to test our web app. In the meantime, we will monitor the CPU and memory usage on the target VM and the response time of the health endpoint.
+
+By the way, we have defined limits on our docker containers in the docker-compose.yml file to simulate resource constraints:
+```yaml
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25" # max 25% of a CPU
+          memory: 512M # hard memory limit
+        reservations:
+          cpus: "0.25" # optional
+          memory: 256M
+```
+
+```bash
+# From target VM
+sudo docker stats
+
+# From Terminal 3
+curl http://192.168.56.102:8080/health
+
+watch -n 2 'status=$(curl -s -o /dev/null -w "%{http_code}" http://192.168.56.102:8080/health); \
+if [ "$status" = "200" ]; then \
+  echo "Status: $status (UP)"; \
+  curl -s -w "Response time: %{time_total}s\n" http://192.168.56.102:8080/health; \
+else \
+  echo "Status: $status (DOWN)"; \
+fi'
+```
+
+**Scenario 1: normal users**
+```bash
+# From attacker VM
+cd /vagrant/attacker/load/
+locust -f locustfile.py -H http://192.168.56.102:8080
+# Open browser at http://192.168.56.101:8089
+```
+
+**Scenario 2: ddos health without users**
+```bash
+# From attacker VM
+cd /vagrant/attacker/load/
+locust -f locust_ddos_not_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
+# Open browser at http://192.168.56.101:8089
+```
+
+**Scenario 3: health with normal users**
+```bash
+# From attacker VM
+cd /vagrant/attacker/load/
+locust -f locust_ddos_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
+# Open browser at http://192.168.56.101:8089
+```
 
 ### first protection steps
 

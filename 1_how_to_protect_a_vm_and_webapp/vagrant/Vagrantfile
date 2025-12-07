@@ -23,6 +23,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     # Static private network IP (change if needed)
     attacker.vm.network "private_network", ip: "192.168.56.101"
 
+    attacker.vm.network "forwarded_port", guest: 8089, host: 8089, auto_correct: true
+
     # Provision attacker: install basic testing tools and (optional) copy private key
     attacker.vm.provision "shell", inline: <<-SHELL
       set -euo pipefail
