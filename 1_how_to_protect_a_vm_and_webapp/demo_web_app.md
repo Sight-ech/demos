@@ -451,8 +451,8 @@ Now let's set up protections to mitigate these attacks.
 
 Configure your nginx default.conf to define a specific log file for the API access log.
 
-```conf
-# From target VM
+Define the log format in `nginx/default.conf`:
+```bash
 log_format vpsguard '$remote_addr - $remote_user [$time_local] '
                     '"$request" $status $body_bytes_sent '
                     '"$http_user_agent" "$http_referer"';
@@ -609,6 +609,8 @@ sudo sudo iptables -L f2b-nginx-login-abuse -n -v --line-numbers
 sudo fail2ban-client set nginx-login-abuse unbanip 192.168.56.101
 ```
 
+>⚠️ Here we blocked the attacker to access the /login endpoint after 6 failed attempts and avoid potential account compromise.
+
 
 **Case 2: DDoS attack on /health**
 Here is the locust DDoS scenario and it will activate the nginx-health-flood jail and ban the attacker IP after 50 requests within 10 seconds.
@@ -626,6 +628,9 @@ sudo sudo iptables -L f2b-nginx-health-flood -n -v --line-numbers
 # Unban attacker IP
 sudo fail2ban-client set nginx-health-flood unbanip 192.168.56.101
 ```
+
+>⚠️ Here we protected the /health endpoint from being overwhelmed by excessive requests and ensured its availability for legitimate users.
+
 ---
 
 ## End Note
