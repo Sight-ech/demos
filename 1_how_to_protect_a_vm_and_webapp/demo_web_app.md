@@ -343,7 +343,6 @@ In our case, I built a simple API that allows users to login, add values, and ge
             ├─ POST /add     → add value
             ├─ GET /io       → simulate I/O bound
             └─ GET /compute  → simulate compute
-
 ```
 
 ---
@@ -427,7 +426,7 @@ locust -f locustfile.py -H http://192.168.56.102:8080
 # Open browser at http://192.168.56.101:8089
 ```
 
-**Scenario 2: ddos health without users**
+**Scenario 2: ddos without users**
 ```bash
 # From attacker VM
 cd /vagrant/attacker/load/
@@ -435,13 +434,18 @@ locust -f locust_ddos_not_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
 # Open browser at http://192.168.56.101:8089
 ```
 
-**Scenario 3: health with normal users**
+**Scenario 3: ddos with normal users**
 ```bash
 # From attacker VM
 cd /vagrant/attacker/load/
 locust -f locust_ddos_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
 # Open browser at http://192.168.56.101:8089
 ```
+
+Here we can clearly see that the health endpoint becomes unresponsive under heavy load.
+It was around 20ms response time before the attack and now it is going to 14000ms and even more.
+
+Now let's set up protections to mitigate these attacks.
 
 ### first protection steps
 
@@ -627,3 +631,5 @@ sudo fail2ban-client set nginx-health-flood unbanip 192.168.56.101
 ## End Note
 **Congratulations!**
 You have successfully protected a VM and a web application against various attacks using multiple layers of security.
+
+Now go to **Kahoot** !!
