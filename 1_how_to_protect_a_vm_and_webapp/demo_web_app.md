@@ -79,10 +79,11 @@
     - [Brute force attack on web app login](#brute-force-attack-on-web-app-login)
     - [Locust Scenarios](#locust-scenarios)
     - [first protection steps](#first-protection-steps-1)
-    - [Create the filter](#create-the-filter)
-    - [Create the jail](#create-the-jail)
-    - [Reload fail2ban](#reload-fail2ban)
-    - [Check the status](#check-the-status)
+      - [Create Filters](#create-filters)
+      - [Create Jails](#create-jails)
+      - [IP tables verification](#ip-tables-verification)
+    - [Check the protections](#check-the-protections)
+  - [End Note](#end-note)
 
 
 ---
@@ -295,8 +296,12 @@ It will fail to connect since password authentication is disabled.
 
 ```bash
 vagrant provision target --provision-with install_docker
+vagrant rsync target
 vagrant provision target --provision-with deploy_webapp
 ```
+
+**Access the web app**
+Open your web browser and go to http://192.168.56.102:8080
 
 In our web app, we have **3 main components**:
 1. The API (the web application itself)
@@ -440,57 +445,185 @@ locust -f locust_ddos_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
 
 ### first protection steps
 
-Verify that files:
+Configure your nginx default.conf to define a specific log file for the API access log.
+
+```conf
+# From target VM
+log_format vpsguard '$remote_addr - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    '"$http_user_agent" "$http_referer"';
+
+access_log /var/log/nginx/access.log vpsguard;
+error_log  /var/log/nginx/error.log;
+```
+
+And map it in the docker-compose.yml file.
+```yaml
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+```
+It lets us have a dedicated access log with specific format that we can use to create a fail2ban filter.
+
+#### Create Filters
+
+After setting up the access log, we can create a fail2ban filter to detect failed authentication attempts on the API.
+
+We’ll create 2 filters:
+- nginx-login-abuse → detects repeated login failures
+- nginx-health-flood → detects excessive /health requests
+
+**Filter 1: nginx-login-abuse**
+It protects against brute-force attacks on the /login endpoint by banning IPs with multiple failed login attempts (HTTP 401).
 
 ```bash
-access_log /var/log/nginx/api.access.log;
-error_log  /var/log/nginx/api.error.log;
-```
+# From target VM
+sudo vi /etc/fail2ban/filter.d/nginx-login-abuse.conf
 
-Or set it here:
-/etc/nginx/sites-available/api.conf
-sudo systemctl reload nginx
-
-### Create the filter
-sudo vi /etc/fail2ban/filter.d/nginx-api-auth.conf
-
-Add:
-```
+# Add:
 [Definition]
-failregex = ^<HOST> -.*"(GET|POST|PUT|DELETE|PATCH).*HTTP.*" (401|403)
+failregex = ^<HOST> - .*POST /login HTTP/1\.[01]" 401
+ignoreregex =
+```
+**Filter 2: nginx-health-flood**
+It protects against denial-of-service attacks by banning IPs that flood the /health endpoint with excessive requests (HTTP 200).
+```bash
+# From target VM
+sudo vi /etc/fail2ban/filter.d/nginx-health-flood.conf
+
+# Add:
+[Definition]
+failregex = ^<HOST> - .*GET /health HTTP/1\.[01]" 200
 ignoreregex =
 ```
 
-### Create the jail
-sudo vi /etc/fail2ban/jail.d/nginx-api-auth.local
+---
 
-Add:
-```
-[nginx-api-auth]
-enabled = true
-filter = nginx-api-auth
-logpath = /var/log/nginx/api.access.log
-maxretry = 5
-findtime = 600
-bantime = 86400
-ignoreip = 127.0.0.1/8 ::1
-action = iptables[name=APIAuth, port=http, protocol=tcp]
-```
+> Here is **another example** of a fail2ban filter to block HTTP 401 and 403 errors in Nginx access logs:
+> ```
+> [Definition]
+>failregex = ^<HOST> -.*"(GET|POST|PUT|DELETE|PATCH).*HTTP.*" (401|403)
+>ignoreregex =
+>```
 
-### Reload fail2ban
+---
+
+#### Create Jails
+Now that we have created the filters, we can create the corresponding jails in fail2ban to activate the protections.
+
+**Jail 1: nginx-login-abuse**
+
 ```bash
-sudo fail2ban-client reload
+# From target VM
+sudo vi /etc/fail2ban/jail.d/nginx-login-abuse.conf
 
-# Restart fail2ban
+# Add:
+[nginx-login-abuse]
+enabled  = true
+filter   = nginx-login-abuse
+logpath  = /var/log/nginx/access.log
+port     = 80
+protocol = tcp
+# allow 6 failed logins
+maxretry  = 6
+# within 60 seconds
+findtime  = 60
+# ban for 5 minutes
+bantime   = 300
+
+action = iptables-multiport[name=nginx-login-abuse, port="80", protocol=tcp, chain=DOCKER-USER]
+```
+
+**Jail 2: nginx-health-flood**
+
+```bash
+# From target VM
+sudo vi /etc/fail2ban/jail.d/nginx-health-flood.conf
+
+# Add:
+[nginx-health-flood]
+enabled  = true
+filter   = nginx-health-flood
+logpath  = /var/log/nginx/access.log
+port     = 80
+protocol = tcp
+# allow 50 requests
+maxretry  = 10
+# within 10 seconds
+findtime  = 1
+# ban for 5 minutes
+bantime   = 300
+
+action = iptables-multiport[name=nginx-health-flood, port="80", protocol=tcp, chain=DOCKER-USER]
+```
+
+Restart fail2ban to apply the changes:
+```bash
 sudo systemctl restart fail2ban
 sudo systemctl status fail2ban
 ```
 
-### Check the status
+Check the status of the new jails:
 ```bash
-sudo fail2ban-client status nginx-api-auth
+sudo fail2ban-client status nginx-login-abuse
+sudo fail2ban-client status nginx-health-flood
+```
+You should see the jails are active and ready to protect your web app against brute-force login attempts and health endpoint flooding.
+
+#### IP tables verification
+
+Check the iptables rules, it should show no banned IPs at the beginning and empty chains for our jails:
+```bash
+sudo iptables -L DOCKER-USER -n --line-numbers -v
+
+# Check specific chains for our jails --> should be empty at the beginning
+sudo iptables -L f2b-nginx-login-abuse -n -v --line-numbers
+sudo iptables -L f2b-nginx-health-flood -n -v --line-numbers
+```
+
+---
+
+### Check the protections
+Now that we have set up the protections, we can test them by running the brute-force attack on the /login endpoint and the locust DDoS scenario on the /health endpoint again.
+
+
+**Case 1: Brute-force attack on /login**
+Here is the brute-force attack and it will activate the nginx-login-abuse jail and ban the attacker IP after 6 failed attempts.
+
+```bash
+# From attacker VM
+cd /vagrant/attacker/
+python async_http_brutforce.py --host 192.168.56.102 --port 8080 --endpoint /login --username demo --password-file 200_passwords.txt
+
+# Should return: Connection refused
+curl http://192.168.56.102:8080/health
+
+# From target VM
+sudo fail2ban-client status nginx-login-abuse
+sudo sudo iptables -L f2b-nginx-login-abuse -n -v --line-numbers
+
+# Unban attacker IP
+sudo fail2ban-client set nginx-login-abuse unbanip 192.168.56.101
 ```
 
 
+**Case 2: DDoS attack on /health**
+Here is the locust DDoS scenario and it will activate the nginx-health-flood jail and ban the attacker IP after 50 requests within 10 seconds.
 
+```bash
+# From attacker VM
+cd /vagrant/attacker/load/
+locust -f locust_ddos_not_real.py -H http://192.168.56.102:8080 -u 5000 -r 200
+# Should return: Connection refused
 
+# From target VM
+sudo fail2ban-client status nginx-health-flood
+sudo sudo iptables -L f2b-nginx-health-flood -n -v --line-numbers
+
+# Unban attacker IP
+sudo fail2ban-client set nginx-health-flood unbanip 192.168.56.101
+```
+---
+
+## End Note
+**Congratulations!**
+You have successfully protected a VM and a web application against various attacks using multiple layers of security.
