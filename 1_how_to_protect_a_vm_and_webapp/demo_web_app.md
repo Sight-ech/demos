@@ -334,12 +334,11 @@ In our case, I built a simple API that allows users to login, add values, and ge
 │  User   │─────▶│  API (HTTP) │─────▶│  App Logic   │
 └─────────┘      └─────────────┘      └──────────────┘
             │
-            ├─ GET /index    → render index page
+            ├─ GET /         → render index page
             ├─ GET /health   → check health
             ├─ POST /login   → authenticate login
             ├─ POST /logout  → authenticate logout
             ├─ GET  /add     → get sum
-            ├─ POST /add     → add value
             ├─ POST /add     → add value
             ├─ GET /io       → simulate I/O bound
             └─ GET /compute  → simulate compute
